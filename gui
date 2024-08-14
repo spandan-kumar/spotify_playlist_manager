@@ -1,0 +1,52 @@
+import tkinter as tk
+from tkinter import messagebox
+import requests
+
+def submit_playlist():
+    track_name = entry_track_name.get()
+    artist_name = entry_artist_name.get()
+    playlist_name = entry_playlist_name.get()
+    # user_id = entry_user_id.get()
+    user_id = ''
+    
+    if not all([track_name, artist_name, playlist_name, user_id]):
+        messagebox.showwarning("Input Error", "All fields are required")
+        return
+
+    response = requests.post(
+        'http://127.0.0.1:8888/manage_playlist',
+        data={
+            'track_name': track_name,
+            'artist_name': artist_name,
+            'playlist_name': playlist_name,
+            'user_id': user_id
+        }
+    )
+
+    if response.status_code == 200:
+        messagebox.showinfo("Success", "Track added to playlist successfully!")
+    else:
+        messagebox.showerror("Error", "Failed to add track to playlist")
+
+root = tk.Tk()
+root.title("Spotify Playlist Manager")
+
+tk.Label(root, text="Track Name:").pack()
+entry_track_name = tk.Entry(root)
+entry_track_name.pack()
+
+tk.Label(root, text="Artist Name:").pack()
+entry_artist_name = tk.Entry(root)
+entry_artist_name.pack()
+
+tk.Label(root, text="Playlist Name:").pack()
+entry_playlist_name = tk.Entry(root)
+entry_playlist_name.pack()
+
+tk.Label(root, text="Spotify User ID:").pack()
+entry_user_id = tk.Entry(root)
+entry_user_id.pack()
+
+tk.Button(root, text="Submit", command=submit_playlist).pack()
+
+root.mainloop()
