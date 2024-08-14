@@ -1,0 +1,174 @@
+from flask import Flask, request, redirect, session, url_for
+import requests
+import base64
+import os
+
+app = Flask(__name__)
+app.secret_key = os.urandom(24)
+
+CLIENT_ID = ''
+CLIENT_SECRET = ''
+REDIRECT_URI = 'http://localhost:8888/callback'
+SCOPE = 'playlist-modify-public playlist-modify-private'
+user_id = ''
+
+@app.route('/')
+def index():
+    return redirect(get_authorization_url())
+
+@app.route('/callback')
+def callback():
+    code = request.args.get('code')
+    if not code:
+        return 'Authorization code not found', 400
+
+    token_data = get_access_token(code)
+    if 'access_token' not in token_data:
+        return 'Failed to get access token', 400
+    
+    session['access_token'] = token_data.get('access_token')
+    return redirect(url_for('gui'))
+
+def get_authorization_url():
+    auth_url = 'https://accounts.spotify.com/authorize'
+    params = {
+        'response_type': 'code',
+        'redirect_uri': REDIRECT_URI,
+        'client_id': CLIENT_ID,
+        'scope': SCOPE
+    }
+    return f"{auth_url}?{requests.compat.urlencode(params)}"
+
+
+def get_access_token(code):
+    token_url = 'https://accounts.spotify.com/api/token'
+    headers = {'Authorization': 'Basic ' + base64.b64encode(f'{CLIENT_ID}:{CLIENT_SECRET}'.encode()).decode('ascii')}
+    data = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'redirect_uri': REDIRECT_URI
+    }
+    response = requests.post(token_url, headers=headers, data=data)
+    print(f"Token Response Status Code: {response.status_code}")
+    print(f"Token Response JSON: {response.json()}")
+    return response.json()
+
+@app.route('/gui')
+def gui():
+    return '''
+    <html>
+    <body>
+    <h1>Spotify Playlist Manager</h1>
+    <form action="/manage_playlist" method="post">
+        <label>Track Name:</label><br>
+        <input type="text" name="track_name"><br>
+        <label>Artist Name:</label><br>
+        <input type="text" name="artist_name"><br>
+        <label>Playlist Name:</label><br>
+        <input type="text" name="playlist_name"><br><br>
+        <input type="submit" value="Submit">
+    </form>
+    </body>
+    </html>
+    '''
+
+@app.route('/manage_playlist', methods=['POST'])
+def manage_playlist():
+    access_token = session.get('access_token')
+    if not access_token:
+        return 'Access token not found', 400
+
+    track_name = request.form['track_name']
+    artist_name = request.form['artist_name']
+    playlist_name = request.form['playlist_name']
+
+    if not all([track_name, artist_name, playlist_name]):
+        return 'All fields are required', 400
+
+    track_id = search_track(track_name, artist_name, access_token)
+    if not track_id:
+        return 'Track not found', 404
+
+    user_id = get_user_id(access_token)
+    if not user_id:
+        return 'Failed to get user ID', 400
+
+    playlist_id = create_playlist(user_id, playlist_name, access_token)
+    if not playlist_id:
+        return 'Failed to create playlist', 400
+
+    success = add_track_to_playlist(playlist_id, track_id, access_token)
+    if success:
+        return f"Successfully added '{track_name}' to '{playlist_name}'", 200
+    else:
+        return 'Failed to add track to playlist', 400
+
+def get_user_id(token):
+    user_url = 'https://api.spotify.com/v1/me'
+    headers = {'Authorization': f'Bearer {token}'}
+    response = requests.get(user_url, headers=headers)
+    print(f"User ID Response Status Code: {response.status_code}")
+    if response.status_code == 200:
+        try:
+            user_data = response.json()
+            print(f"User ID Response JSON: {user_data}")
+            return user_data.get('id')
+        except ValueError:
+            print('Failed to decode JSON response from user ID endpoint')
+            return None
+    else:
+        return None
+
+def search_track(track_name, artist_name, token):
+    search_url = 'https://api.spotify.com/v1/search'
+    headers = {'Authorization': f'Bearer {token}'}
+    params = {'q': f'track:{track_name} artist:{artist_name}', 'type': 'track', 'limit': 1}
+    response = requests.get(search_url, headers=headers, params=params)
+    print(f"Search Track Response Status Code: {response.status_code}")
+    if response.status_code == 200:
+        try:
+            tracks = response.json().get('tracks', {}).get('items', [])
+            print(f"Search Track Response JSON: {response.json()}")
+            if tracks:
+                return tracks[0]['id']
+        except ValueError:
+            print('Failed to decode JSON response from search track endpoint')
+            return None
+    return None
+
+def create_playlist(user_id, playlist_name, token):
+    playlist_url = f'https://api.spotify.com/v1/users/{user_id}/playlists'
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    data = {'name': playlist_name, 'description': 'Created by my app', 'public': False}
+    response = requests.post(playlist_url, headers=headers, json=data)
+    print(f"Create Playlist Response Status Code: {response.status_code}")
+    if response.status_code == 201:
+        try:
+            playlist_data = response.json()
+            print(f"Create Playlist Response JSON: {playlist_data}")
+            return playlist_data.get('id')
+        except ValueError:
+            print('Failed to decode JSON response from create playlist endpoint')
+            return None
+    return None
+
+def add_track_to_playlist(playlist_id, track_id, token):
+    add_track_url = f'https://api.spotify.com/v1/playlists/{playlist_id}/tracks'
+    headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+    data = {'uris': [f'spotify:track:{track_id}']}
+    response = requests.post(add_track_url, headers=headers, json=data)
+    
+    print(f"Add Track URL: {add_track_url}")
+    print(f"Add Track Data: {data}")
+    print(f"Add Track Response Status Code: {response.status_code}")
+    print(f"Add Track Response JSON: {response.json()}")
+    
+    if response.status_code == 201:
+        print("Track added successfully.")
+    else:
+        print("Failed to add track.")
+    
+    return response.status_code == 201
+
+if __name__ == '__main__':
+    app.run(port=8888)
